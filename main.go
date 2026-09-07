@@ -11,12 +11,26 @@
 //
 // При желании автозапуска — положи бинарник куда удобно и добавь в
 // Login Items (Системные настройки → Основные → Элементы входа).
+//
+// Переключение конфигураций:
+//
+//	Положи несколько *.json файлов в ~/.config/singbox-tray/configs/,
+//	например: home.json, work-vpn.json, discord-only.json.
+//	В трее появится подменю "Конфигурация" со списком этих файлов.
+//	При выборе трей создаёт симлинк
+//	  $(brew --prefix)/etc/sing-box/config.json -> выбранный файл
+//	и перезапускает sing-box через brew services, чтобы применить конфиг.
+//
+//	Список конфигов сканируется один раз при старте — если добавил
+//	новый файл, перезапусти трей-приложение.
 package main
 
 import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -36,6 +50,9 @@ var brewCandidates = []string{
 
 var brewPath = resolveBrewPath()
 
+// brewPrefix кэшируется, т.к. `brew --prefix` дергает Ruby и не бесплатен.
+var brewPrefixCache string
+
 func resolveBrewPath() string {
 	for _, p := range brewCandidates {
 		if _, err := os.Stat(p); err == nil {
@@ -54,6 +71,126 @@ func resolveBrewPath() string {
 	return "" // не нашли — покажем ошибку пользователю при первом действии
 }
 
+// brewPrefix возвращает результат `brew --prefix` (например /opt/homebrew).
+func brewPrefix() (string, error) {
+	if brewPrefixCache != "" {
+		return brewPrefixCache, nil
+	}
+	if brewPath == "" {
+		return "", fmt.Errorf("brew не найден")
+	}
+	out, err := exec.Command(brewPath, "--prefix").Output()
+	if err != nil {
+		return "", fmt.Errorf("brew --prefix: %w", err)
+	}
+	brewPrefixCache = strings.TrimSpace(string(out))
+	return brewPrefixCache, nil
+}
+
+// activeConfigPath — путь, который читает установленный через brew sing-box.
+func activeConfigPath() (string, error) {
+	prefix, err := brewPrefix()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(prefix, "etc", serviceName, "config.json"), nil
+}
+
+// configsDir — папка с твоими именованными конфигами.
+//
+// Намеренно не используем os.UserConfigDir(): на macOS он возвращает
+// ~/Library/Application Support, а не ~/.config, что неочевидно и
+// расходится с тем, куда обычно кладут конфиги руками.
+func configsDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = os.Getenv("HOME")
+	}
+	return filepath.Join(home, ".config", "singbox-tray", "configs")
+}
+
+type configEntry struct {
+	name string // без .json, показывается в меню
+	path string // абсолютный путь к файлу
+}
+
+// loadConfigs сканирует configsDir() на *.json, сортирует по имени.
+func loadConfigs() []configEntry {
+	dir := configsDir()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var result []configEntry
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		result = append(result, configEntry{
+			name: strings.TrimSuffix(e.Name(), ".json"),
+			path: filepath.Join(dir, e.Name()),
+		})
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].name < result[j].name })
+	return result
+}
+
+// currentActiveConfigName определяет, на какой конфиг сейчас указывает симлинк.
+func currentActiveConfigName(configs []configEntry) string {
+	target, err := activeConfigPath()
+	if err != nil {
+		return ""
+	}
+	linkDest, err := os.Readlink(target)
+	if err != nil {
+		return "" // не симлинк (например, дефолтный config.json от формулы) — ничего не подсвечиваем
+	}
+	for _, c := range configs {
+		if linkDest == c.path {
+			return c.name
+		}
+	}
+	return ""
+}
+
+// openConfigsInZed открывает папку с конфигами в Zed через Launch Services
+// (`open -a Zed`), так что не зависит от того, стоит ли Zed CLI в PATH —
+// та же логика, что и с поиском brew у GUI-процессов.
+func openConfigsInZed() error {
+	dir := configsDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", dir, err)
+	}
+	cmd := exec.Command("open", "-a", "Zed", dir)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("open -a Zed %s: %w\n%s", dir, err, out)
+	}
+	return nil
+}
+
+// switchConfig переключает симлинк на выбранный конфиг и перезапускает sing-box.
+func switchConfig(c configEntry) error {
+	target, err := activeConfigPath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", filepath.Dir(target), err)
+	}
+	// Удаляем текущий файл/симлинк (если есть) и создаём новый симлинк.
+	if _, err := os.Lstat(target); err == nil {
+		if err := os.Remove(target); err != nil {
+			return fmt.Errorf("remove %s: %w", target, err)
+		}
+	}
+	if err := os.Symlink(c.path, target); err != nil {
+		return fmt.Errorf("symlink %s -> %s: %w", target, c.path, err)
+	}
+	runBrew("restart")
+	return nil
+}
+
 func main() {
 	systray.Run(onReady, onExit)
 }
@@ -70,7 +207,36 @@ func onReady() {
 	mStop := systray.AddMenuItem("Остановить", "brew services stop sing-box")
 	mRestart := systray.AddMenuItem("Перезапустить", "brew services restart sing-box")
 	systray.AddSeparator()
+
+	configs := loadConfigs()
+	configItems := make(map[string]*systray.MenuItem, len(configs))
+	var mConfigRoot *systray.MenuItem
+
+	if len(configs) > 0 {
+		mConfigRoot = systray.AddMenuItem("Конфигурация", "Выбор активного конфига sing-box")
+		for _, c := range configs {
+			item := mConfigRoot.AddSubMenuItem(c.name, c.path)
+			configItems[c.name] = item
+		}
+	} else {
+		note := systray.AddMenuItem("Конфигурация: нет файлов", configsDir())
+		note.Disable()
+	}
+	mOpenZed := systray.AddMenuItem("Открыть папку конфигов в Zed", configsDir())
+	systray.AddSeparator()
+
 	mQuit := systray.AddMenuItem("Выход", "Закрыть трей-иконку")
+
+	updateConfigChecks := func() {
+		active := currentActiveConfigName(configs)
+		for name, item := range configItems {
+			if name == active {
+				item.Check()
+			} else {
+				item.Uncheck()
+			}
+		}
+	}
 
 	refresh := func() {
 		running, detail := checkStatus()
@@ -86,6 +252,7 @@ func onReady() {
 		if detail != "" {
 			systray.SetTooltip("sing-box: " + detail)
 		}
+		updateConfigChecks()
 	}
 
 	refresh()
@@ -99,6 +266,23 @@ func onReady() {
 			refresh()
 		}
 	}()
+
+	// Отдельная горутина на каждый пункт конфигурации — ClickedCh у
+	// каждого MenuItem свой, и его нужно слушать индивидуально.
+	for _, c := range configs {
+		c := c // захват переменной цикла
+		item := configItems[c.name]
+		go func() {
+			for range item.ClickedCh {
+				if err := switchConfig(c); err != nil {
+					fmt.Printf("switchConfig(%s): ошибка: %v\n", c.name, err)
+					continue
+				}
+				fmt.Printf("конфигурация переключена на %q\n", c.name)
+				refresh()
+			}
+		}()
+	}
 
 	go func() {
 		for {
@@ -114,6 +298,11 @@ func onReady() {
 			case <-mRestart.ClickedCh:
 				runBrew("restart")
 				refresh()
+
+			case <-mOpenZed.ClickedCh:
+				if err := openConfigsInZed(); err != nil {
+					fmt.Printf("openConfigsInZed: ошибка: %v\n", err)
+				}
 
 			case <-mQuit.ClickedCh:
 				systray.Quit()
