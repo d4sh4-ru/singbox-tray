@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>SingboxTray</string>
+    <key>CFBundleDisplayName</key>
+    <string>Singbox Tray</string>
+    <key>CFBundleIdentifier</key>
+    <string>local.singbox-tray</string>
+    <key>CFBundleVersion</key>
+    <string>1.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleExecutable</key>
+    <string>singbox-tray</string>
+
+    <!-- Не показывать иконку в Dock и не создавать пункт в Cmd+Tab —
+         это чисто трей-приложение, ему хватит строки меню. -->
+    <key>LSUIElement</key>
+    <true/>
+
+    <!-- Без консоли/терминала при запуске -->
+    <key>LSBackgroundOnly</key>
+    <false/>
+
+    <key>NSHighResolutionCapable</key>
+    <true/>
+</dict>
+</plist>
