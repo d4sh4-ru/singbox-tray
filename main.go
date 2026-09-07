@@ -39,6 +39,10 @@ import (
 
 const serviceName = "sing-box"
 
+// version подставляется при сборке через -ldflags "-X main.version=...".
+// В `go run` / `go build` без флагов останется "dev".
+var version = "dev"
+
 // GUI-процессы (запущенные через Finder / Login Items, а не из терминала)
 // не наследуют PATH из твоего .zshrc/.zprofile, поэтому обычный
 // exec.Command("brew", ...) его не находит. Ищем brew явно по типичным
@@ -169,6 +173,15 @@ func openConfigsInZed() error {
 	return nil
 }
 
+// notify показывает нативное уведомление macOS. В режиме .app у приложения нет
+// консоли, поэтому fmt.Printf с ошибками никто не видит — дублируем важное сюда.
+func notify(text string) {
+	// osascript всегда есть в macOS; кавычки в тексте экранируем.
+	safe := strings.ReplaceAll(text, `"`, `'`)
+	script := fmt.Sprintf(`display notification "%s" with title "SingboxTray"`, safe)
+	_ = exec.Command("osascript", "-e", script).Run()
+}
+
 // switchConfig переключает симлинк на выбранный конфиг и перезапускает sing-box.
 func switchConfig(c configEntry) error {
 	target, err := activeConfigPath()
@@ -187,8 +200,7 @@ func switchConfig(c configEntry) error {
 	if err := os.Symlink(c.path, target); err != nil {
 		return fmt.Errorf("symlink %s -> %s: %w", target, c.path, err)
 	}
-	runBrew("restart")
-	return nil
+	return runBrew("restart")
 }
 
 func main() {
@@ -225,6 +237,8 @@ func onReady() {
 	mOpenZed := systray.AddMenuItem("Открыть папку конфигов в Zed", configsDir())
 	systray.AddSeparator()
 
+	mVersion := systray.AddMenuItem("Версия: "+version, "Версия сборки singbox-tray")
+	mVersion.Disable()
 	mQuit := systray.AddMenuItem("Выход", "Закрыть трей-иконку")
 
 	updateConfigChecks := func() {
@@ -240,18 +254,41 @@ func onReady() {
 
 	refresh := func() {
 		running, detail := checkStatus()
+		active := currentActiveConfigName(configs)
+
+		// В строке меню показываем и статус, и активный конфиг:
+		//   "SB ● home"  — запущен на конфиге home
+		//   "SB ○"       — остановлен, конфиг не из нашего списка
+		dot := "○"
+		word := "остановлен"
 		if running {
-			systray.SetTitle("SB ●")
-			systray.SetTooltip("sing-box: запущен")
-			mStatus.SetTitle("Статус: запущен")
-		} else {
-			systray.SetTitle("SB ○")
-			systray.SetTooltip("sing-box: остановлен")
-			mStatus.SetTitle("Статус: остановлен")
+			dot = "●"
+			word = "запущен"
+		}
+		title := "SB " + dot
+		if active != "" {
+			title += " " + active
+		}
+		systray.SetTitle(title)
+
+		tooltip := "sing-box: " + word
+		if active != "" {
+			tooltip += " (" + active + ")"
 		}
 		if detail != "" {
-			systray.SetTooltip("sing-box: " + detail)
+			tooltip = "sing-box: " + detail
+			if active != "" {
+				tooltip += " (" + active + ")"
+			}
 		}
+		systray.SetTooltip(tooltip)
+
+		if running {
+			mStatus.SetTitle("Статус: запущен")
+		} else {
+			mStatus.SetTitle("Статус: остановлен")
+		}
+
 		updateConfigChecks()
 	}
 
@@ -317,19 +354,24 @@ func onExit() {
 	// runBrew("stop")
 }
 
-// runBrew выполняет `brew services <action> sing-box`.
-func runBrew(action string) {
+// runBrew выполняет `brew services <action> sing-box`. Ошибку и возвращает,
+// и показывает уведомлением — иначе в режиме .app сбой останется незамеченным.
+func runBrew(action string) error {
 	if brewPath == "" {
-		fmt.Println("brew не найден (проверь brewCandidates в коде под свою установку)")
-		return
+		err := fmt.Errorf("brew не найден (проверь brewCandidates в коде под свою установку)")
+		fmt.Println(err)
+		notify(err.Error())
+		return err
 	}
 	cmd := exec.Command(brewPath, "services", action, serviceName)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		fmt.Printf("brew services %s %s: ошибка: %v\n%s\n", action, serviceName, err, out)
-		return
+		notify(fmt.Sprintf("brew services %s не удался: %v", action, err))
+		return fmt.Errorf("brew services %s %s: %w", action, serviceName, err)
 	}
 	fmt.Printf("brew services %s %s: ok\n%s\n", action, serviceName, out)
+	return nil
 }
 
 // checkStatus парсит `brew services list` и определяет, запущен ли sing-box.
