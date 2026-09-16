@@ -1,0 +1,51 @@
+name: Release
+
+# Собирает SingboxTray.app и публикует его как GitHub Release при каждом
+# push тега вида v* (например v1.1.2). Тег создаётся вручную:
+#   git tag v1.1.2 && git push origin v1.1.2
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # package-app.sh вызывает `git describe --tags`, для него нужна
+          # полная история и все теги, а не мелкий/неглубокий чекаут.
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build SingboxTray.app
+        run: |
+          chmod +x package-app.sh
+          ./package-app.sh
+
+      - name: Zip app bundle
+        run: |
+          ASSET_NAME="SingboxTray-${{ github.ref_name }}.app.zip"
+          # ditto, а не zip: сохраняет символьные ссылки, ресурсные форки
+          # и ad-hoc подпись .app бандла как есть.
+          ditto -c -k --sequesterRsrc --keepParent SingboxTray.app "$ASSET_NAME"
+          echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+
+      - name: Publish GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            "${ASSET_NAME}" \
+            --title "${{ github.ref_name }}" \
+            --generate-notes

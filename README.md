@@ -65,6 +65,21 @@ chmod +x package-app.sh
 уведомлением macOS — в режиме `.app` консоли нет, и иначе сбой прошёл бы
 незаметно.
 
+## Автоматический релиз (GitHub Actions)
+
+При push тега вида `v*` workflow [`.github/workflows/release.yml`](.github/workflows/release.yml)
+сам собирает `SingboxTray.app` (`package-app.sh`) и публикует его как
+GitHub Release с приложенным `SingboxTray-<тег>.app.zip`:
+
+```bash
+git tag v1.1.2
+git push origin v1.1.2
+```
+
+Сборка идёт на `macos-latest`, поэтому бинарник в релизе — под архитектуру
+раннера GitHub (сейчас это Apple Silicon/arm64); под Intel `.app` придётся
+собирать локально.
+
 ## Автозапуск при входе в систему
 
 Системные настройки → Основные → Элементы входа → добавить бинарник
