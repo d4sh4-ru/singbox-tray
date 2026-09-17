@@ -11,12 +11,26 @@
 - `sing-box` установлен через brew (`brew install sing-box`), т.е. доступна
   команда `brew services start|stop|restart sing-box`
 
+## Структура проекта
+
+```
+cmd/singbox-tray/    — точка входа (main), только systray.Run(...)
+internal/brew/        — обёртка над `brew services` / `brew --prefix`
+internal/sbconfig/     — список конфигов и переключение symlink'а (без знания о brew)
+internal/notify/       — уведомления macOS и «открыть папку в приложении»
+internal/tray/          — меню трея, оркестрирует три пакета выше
+```
+
+`internal/brew` и `internal/sbconfig` не трогают глобальное состояние и не
+завязаны друг на друга напрямую, поэтому у них есть юнит-тесты
+(`go test ./...`) — без реального brew и без настоящего `~/.config`.
+
 ## Сборка (как консольный бинарник — для отладки)
 
 ```bash
 cd singbox-tray
 go mod tidy
-go build -o singbox-tray .
+go build -o singbox-tray ./cmd/singbox-tray
 ./singbox-tray
 ```
 
@@ -97,8 +111,8 @@ git push origin v1.1.2
 which brew
 ```
 
-Если он отличается от этих двух — добавь его в срез `brewCandidates` в
-начале `main.go` и пересобери (`./package-app.sh`).
+Если он отличается от этих двух — добавь его в `candidatePaths` в
+`internal/brew/brew.go` и пересобери (`./package-app.sh`).
 
 ## Возможные доработки
 

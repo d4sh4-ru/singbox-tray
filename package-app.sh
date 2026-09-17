@@ -32,7 +32,7 @@ echo "==> сборка бинарника (version=${VERSION})"
 CGO_ENABLED=1 go build \
   -trimpath \
   -ldflags "-s -w -X main.version=${VERSION}" \
-  -o "${BIN_NAME}" .
+  -o "${BIN_NAME}" ./cmd/singbox-tray
 
 echo "==> сборка .app бандла"
 rm -rf "${APP_DIR}"
