@@ -1,0 +1,48 @@
+name: CI
+
+# Быстрая проверка на каждый пуш в фиче/фикс-ветки и на PR в main — сборка
+# всех пакетов и юнит-тесты (internal/brew, internal/sbconfig), чтобы
+# поломка компиляции или тестов всплывала сразу, а не только при
+# тегировании релиза (см. release.yml). Полную сборку .app с codesign тут
+# не гоняем, это избыточно для каждого пуша.
+on:
+  push:
+    branches:
+      - main
+      - "feature/**"
+      - "fix/**"
+      - "refactor/**"
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    # cgo (github.com/getlantern/systray) собирается только на macOS.
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt check
+        run: |
+          fmt_out="$(gofmt -l .)"
+          if [ -n "$fmt_out" ]; then
+            echo "Не отформатировано (gofmt -l):"
+            echo "$fmt_out"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test
+        run: go test ./...
